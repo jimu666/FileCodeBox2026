@@ -1,0 +1,68 @@
+# ----------------------------
+# 第一阶段：构建环境
+# ----------------------------
+FROM docker.1ms.run/arm32v7/python:3.9-slim AS builder
+
+# 配置编译环境
+ENV CFLAGS="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard -O2"
+ENV CXXFLAGS="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard -O2"
+ENV PIP_NO_CACHE_DIR=1
+
+# 安装编译依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    libffi-dev \
+    libjpeg-dev \
+    zlib1g-dev \
+    pkg-config \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 升级 pip
+RUN pip install --upgrade pip setuptools wheel
+
+WORKDIR /app
+COPY requirements.txt .
+
+# 分步安装依赖
+RUN echo "开始安装依赖..." \
+    && pip install --prefix=/install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --prefix=/install --no-cache-dir -r requirements.txt
+
+# ----------------------------
+# 第二阶段：运行环境
+# ----------------------------
+FROM docker.1ms.run/arm32v7/python:3.9-slim
+
+# 安装最小运行时依赖，只要 runtime，不需要开发头
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl1.1 || true \
+    libexpat1 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制构建好的 Python 包
+COPY --from=builder /install /usr/local
+
+# 设置环境变量
+ENV PATH="/usr/local/bin:${PATH}" \
+    PYTHONPATH="/usr/local/lib/python3.9/site-packages:${PYTHONPATH}" \
+    PYTHONUNBUFFERED=1
+
+# 创建非 root 用户
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app \
+    && chown -R appuser:appuser /app
+
+USER appuser
+WORKDIR /app
+
+# 复制应用代码
+COPY --chown=appuser:appuser . .
+
+# 清理 pycache
+RUN find /app -name "__pycache__" -exec rm -rf {} +
+
+EXPOSE 12345
+CMD ["python3", "main.py"]
