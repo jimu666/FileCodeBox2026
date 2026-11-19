@@ -8,14 +8,18 @@ FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 ARG FRONTEND_2024_REF=main
 ARG FRONTEND_2023_REF=main
 
+# 安装前端构建依赖
 RUN apk add --no-cache git python3 make g++
 
+# 启用 pnpm
 RUN corepack enable && \
     corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /build
 
+# ==================================================
 # 构建 2024 前端
+# ==================================================
 RUN git clone --filter=blob:none --no-checkout \
     https://github.com/vastsa/FileCodeBoxFronted.git /build/fronted-2024 && \
     cd /build/fronted-2024 && \
@@ -24,7 +28,9 @@ RUN git clone --filter=blob:none --no-checkout \
     pnpm install --frozen-lockfile --prod=false && \
     VITE_GIT_COMMIT="$(git rev-parse HEAD)" pnpm run build
 
+# ==================================================
 # 构建 2023 前端
+# ==================================================
 RUN git clone --filter=blob:none --no-checkout \
     https://github.com/vastsa/FileCodeBoxFronted2023.git /build/fronted-2023 && \
     cd /build/fronted-2023 && \
@@ -35,7 +41,7 @@ RUN git clone --filter=blob:none --no-checkout \
 
 
 # ==================================================
-# 第二阶段：构建 ARMv7 运行镜像
+# 第二阶段：构建最终运行镜像
 # ==================================================
 FROM python:3.12-slim-bookworm
 
@@ -56,18 +62,30 @@ WORKDIR /app
 # 复制项目文件
 COPY . .
 
+# 应用版本
 ENV APP_VERSION="${APP_VERSION}"
 
 # 设置时区
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     echo 'Asia/Shanghai' > /etc/timezone
 
+# ==================================================
 # 复制前端构建产物
-COPY --from=frontend-builder /build/fronted-2024/dist ./themes/2024
+# ==================================================
+
+# 2024 前端实际输出目录：
+# /build/FileCodeBox/themes/2024
+COPY --from=frontend-builder /build/FileCodeBox/themes/2024 ./themes/2024
+
+# 2023 前端实际输出目录：
+# /build/fronted-2023/dist
 COPY --from=frontend-builder /build/fronted-2023/dist ./themes/2023
 
-# 安装系统更新和 Python 依赖
-# 使用 requirements.lock.txt，校验所有依赖哈希
+
+# ==================================================
+# 安装系统更新及 Python 依赖
+# ==================================================
+
 RUN apt-get update && \
     apt-get upgrade -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* && \
@@ -76,7 +94,11 @@ RUN apt-get update && \
     python -m pip check && \
     python -c "import uvicorn; print('uvicorn version:', uvicorn.__version__)"
 
-# 环境变量
+
+# ==================================================
+# 运行环境变量
+# ==================================================
+
 ENV HOST="0.0.0.0" \
     PORT=12345 \
     WORKERS=1 \
@@ -89,5 +111,9 @@ ENV HOST="0.0.0.0" \
 
 EXPOSE 12345
 
+
+# ==================================================
 # 启动应用
+# ==================================================
+
 CMD ["sh", "-c", "access_log_arg=--no-access-log; if [ \"${APP_ENV:-development}\" != \"production\" ] || [ \"${ACCESS_LOG:-false}\" = \"true\" ]; then access_log_arg=--access-log; fi; exec uvicorn main:app --host \"$HOST\" --port \"$PORT\" --workers \"$WORKERS\" --log-level \"$LOG_LEVEL\" \"$access_log_arg\" --timeout-keep-alive \"${TIMEOUT_KEEP_ALIVE:-5}\" --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-}\""]
